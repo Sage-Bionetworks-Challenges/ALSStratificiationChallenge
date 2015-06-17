@@ -12,3 +12,9 @@
 hs_err_pid*
 /bin/
 /target/
+
+**/*.DS_Store
+.classpath
+.project
+.settings
+

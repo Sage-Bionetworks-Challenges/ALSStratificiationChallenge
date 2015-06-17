@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Properties;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -32,7 +33,7 @@ import org.sagebionetworks.evaluation.model.SubmissionBundle;
 import org.sagebionetworks.evaluation.model.SubmissionStatus;
 import org.sagebionetworks.evaluation.model.SubmissionStatusBatch;
 import org.sagebionetworks.evaluation.model.SubmissionStatusEnum;
-import org.sagebionetworks.repo.model.PaginatedResults;
+import org.sagebionetworks.reflection.model.PaginatedResults;
 import org.sagebionetworks.repo.model.annotation.Annotations;
 import org.sagebionetworks.repo.model.annotation.StringAnnotation;
 import org.sagebionetworks.repo.model.file.ExternalFileHandle;
@@ -86,26 +87,28 @@ public class ALSStratificationChallenge {
     	evaluation = synapseAdmin.getEvaluation(getProperty("EVALUATION_ID"));
     }
     
-   
-    private static final long MAX_SCRIPT_EXECUTION_TIME_MILLIS = 600000L; // 600 sec or 10 min
-
     /*
      * @param shellCommand
      * @param params: the params to pass to the shellCommand
      * @param workingDirectory: the working directory for the process (returned by 'cwd' in Perl)
      * @return the shell output of the command
      */
-    public static String executeShellCommand(String shellCommand, String[] params, File workingDirectory) throws IOException {
+    public static String executeShellCommand(String shellCommand, String[] params, List<String> envp, File workingDirectory) throws IOException {
    	    String[] commandAndParams = new String[params.length+1];
    	    int i=0;
   	    commandAndParams[i++] = shellCommand;
    	    if (commandAndParams.length!=i+params.length) throw new IllegalStateException();
    	    System.arraycopy(params, 0, commandAndParams, i, params.length);
-   	    String[] envp = new String[0];
-   	    Process process = Runtime.getRuntime().exec(commandAndParams, envp, workingDirectory);
+   	    System.out.println("\n\n");
+  	    for (int j=0; j<commandAndParams.length; j++) {
+   	    	System.out.print(commandAndParams[j]+" ");
+   	    }
+   	    System.out.println("");
+   	    Process process = Runtime.getRuntime().exec(commandAndParams, envp.toArray(new String[]{}), workingDirectory);
    	    int exitValue = -1;
    	    long processStartTime = System.currentTimeMillis();
-   	    while (System.currentTimeMillis()-processStartTime<MAX_SCRIPT_EXECUTION_TIME_MILLIS) {
+   	    long maxScriptExecutionTimeMillis = Long.parseLong(getProperty("MAX_SCRIPT_EXECUTION_TIME_MILLIS"));
+   	    while (System.currentTimeMillis()-processStartTime<maxScriptExecutionTimeMillis) {
    	    	try {
    	    		exitValue = process.exitValue();
    	    		break;
@@ -119,7 +122,7 @@ public class ALSStratificationChallenge {
    	    		throw new RuntimeException(e);
    	    	}
    	    }
-   	    if (exitValue==-1 && System.currentTimeMillis()-processStartTime>=MAX_SCRIPT_EXECUTION_TIME_MILLIS) {
+   	    if (exitValue==-1 && System.currentTimeMillis()-processStartTime>=maxScriptExecutionTimeMillis) {
    	    	throw new RuntimeException("Process exceeded alloted time.");
    	    }
    	    ByteArrayOutputStream resultOS = new ByteArrayOutputStream();
@@ -136,10 +139,37 @@ public class ALSStratificationChallenge {
    	    	if (resultOS!=null) resultOS.close();
    	    }
    	    if (exitValue!=0) {
-   	    	throw new RuntimeException(output);
+   	   	    System.out.println(output);
+  	    	throw new RuntimeException(output);
    	    }
+   	    System.out.println(output);
    	    return output;
     }
+    
+    public static  List<String> getDockerEnvParams() {
+   	    List<String> envp = new ArrayList<String>();
+   	    if (getProperty("DOCKER_HOST",false)!=null) envp.add("DOCKER_HOST="+getProperty("DOCKER_HOST",false));
+   	    if (getProperty("DOCKER_CERT_PATH",false)!=null) envp.add("DOCKER_CERT_PATH="+getProperty("DOCKER_CERT_PATH",false));
+  	    if (getProperty("DOCKER_TLS_VERIFY",false)!=null) envp.add("DOCKER_TLS_VERIFY="+getProperty("DOCKER_TLS_VERIFY",false));
+  	    if (getProperty("HOME_DIR",false)!=null) envp.add("HOME="+getProperty("HOME_DIR",false));
+  	    return envp;
+    }
+    
+    public static String executeDockerCommand(String[] params, File workingDirectory) throws IOException {
+   	    String dockerCommand = getProperty("DOCKER_COMMAND");
+   	    List<String> envp = getDockerEnvParams();
+   		return executeShellCommand(dockerCommand, params, envp, workingDirectory);
+    }
+    
+//    public static String mountFolder(File hostFolder, File vmVolumne, File workingDirectory) throws IOException {
+//    	String[] params = new String[4];
+//    	int i = 0;
+//    	params[i++]="-t";
+//    	params[i++]="vboxsf";
+//    	params[i++]=hostFolder.getAbsolutePath();
+//    	params[i++]= vmVolumne.getAbsolutePath();
+//   		return executeShellCommand("mount", params, Collections.EMPTY_LIST, workingDirectory);  
+//    }
     
     public static String getDockerReferenceFromFileHandle(FileHandle fileHandle) {
     	if (!(fileHandle instanceof ExternalFileHandle)) 
@@ -178,8 +208,7 @@ public class ALSStratificationChallenge {
     	String dockerReference = getDockerReferenceFromFileHandle(fileHandle);
     	// 'shell out' to 'docker pull <reference>'
     	File tmpDir = Files.createTempDir();
-    	String result = executeShellCommand("docker", new String[] {"pull", dockerReference}, tmpDir);
-    	
+    	String result = executeDockerCommand(new String[] {"pull", dockerReference}, tmpDir);
     	return result;
     }
     
@@ -201,7 +230,7 @@ public class ALSStratificationChallenge {
        	for (int offset=0; offset<total; offset+=PAGE_SIZE) {
        			// get the newly RECEIVED Submissions
        		PaginatedResults<SubmissionBundle> submissionPGs = 
-       			synapseAdmin.getAllSubmissionBundlesByStatus(evaluation.getId(), SubmissionStatusEnum.RECEIVED, offset, PAGE_SIZE);
+           			synapseAdmin.getAllSubmissionBundlesByStatus(evaluation.getId(), SubmissionStatusEnum.RECEIVED, offset, PAGE_SIZE);
         	total = (int)submissionPGs.getTotalNumberOfResults();
         	List<SubmissionBundle> page = submissionPGs.getResults();
         	for (int i=0; i<page.size(); i++) {
@@ -242,13 +271,14 @@ public class ALSStratificationChallenge {
     	synapseAdmin.sendStringMessage(messageMetadata, body);
     }
     
-    //
     public static String[] dockerParams(File ioDirectory, String dockerReference) {
-    	String[] result = new String[4];
-    	result[0] = "run";
-      	result[1] = "-v "+ioDirectory.getAbsolutePath()+":/model_folder";
-      	result[2] = dockerReference;
-      	result[3] = "/run.sh";
+    	String[] result = new String[5];
+    	int i = 0;
+    	result[i++] = "run";
+    	result[i++] = "-v";
+    	result[i++] = ioDirectory.getAbsolutePath()+":/model_folder";
+    	result[i++] = dockerReference;
+      	result[i++] = "/run.sh";
     	return result;
     }
     
@@ -262,11 +292,20 @@ public class ALSStratificationChallenge {
     
     public String scoreOneModel(FileHandle fileHandle, File inputFile) throws IOException {
     	String dockerReference = getDockerReferenceFromFileHandle(fileHandle);
-    	File workingDir = Files.createTempDir();
+    	File workingDir = null;
+    	Boolean usingBoot2Docker = Boolean.valueOf(getProperty("USING_BOOT2_DOCKER"));
+    	if (usingBoot2Docker) {
+    		// if using boot2Docker make the temporary folder in our home directory
+    		workingDir = new File(getProperty("HOME_DIR"), UUID.randomUUID().toString());
+    		workingDir.mkdir();
+    		workingDir.deleteOnExit();
+    	} else {
+        	workingDir = Files.createTempDir();
+    	}
     	Files.copy(inputFile, new File(workingDir, inputFile.getName()));
     	String[] params = dockerParams(workingDir, dockerReference);
-    	// we could also capture the shell output as an annotation
-    	String shellOutput = executeShellCommand("docker", params, workingDir);
+    	// we could also capture the shell output as an annotation or to send to the submitter by email
+    	executeDockerCommand(params, workingDir);
     	InputStream is = new FileInputStream(modelOutputFile(workingDir));
     	try {
     		String outputFileContent = IOUtils.toString(is);
@@ -276,13 +315,33 @@ public class ALSStratificationChallenge {
     	}
     }
     
+    // this downloads a Synapse File using its original file name
+    private File downloadInputFile() throws IOException, SynapseException, JSONObjectAdapterException {
+		// read input file
+		String synId = getProperty("SCORING_DATA_ID");
+		File tmpDir = Files.createTempDir();
+		List<FileHandle> fhs = synapseAdmin.getEntityFileHandlesForCurrentVersion(synId).getList();
+		FileHandle fileHandleToDownload = null;
+		for (FileHandle fh : fhs) {
+			if (!(fh instanceof PreviewFileHandle)) {
+				fileHandleToDownload = fh;
+				break;
+			}
+		}
+		if (fileHandleToDownload==null) throw new RuntimeException("No file handle for "+synId);
+		File destinationFile = new File(tmpDir, fileHandleToDownload.getFileName());
+		synapseAdmin.downloadFromFileEntityCurrentVersion(synId, destinationFile);
+		return destinationFile;
+    }
+    
     /**
      * Note: There are two types of scoring, that in which each submission is scored alone and that
      * in which the entire set of submissions is rescored whenever a new one arrives. 
      * 
      * @throws SynapseException
+     * @throws JSONObjectAdapterException 
      */
-    public void score() throws SynapseException, IOException {
+    public void score() throws SynapseException, IOException, JSONObjectAdapterException {
     	long startTime = System.currentTimeMillis();
     	List<SubmissionStatus> statusesToUpdate = new ArrayList<SubmissionStatus>();
     	long total = Integer.MAX_VALUE;
@@ -299,20 +358,25 @@ public class ALSStratificationChallenge {
         		Submission sub = bundle.getSubmission();
         		FileHandle fileHandle = getFileHandleFromEntityBundle(sub.getEntityBundleJSON());
         		if (inputFile==null) {
-        			// read input file
-        			inputFile = File.createTempFile(null, null);
-        			synapseAdmin.downloadFromFileEntityCurrentVersion(getProperty("SCORING_DATA_ID"), inputFile);
+        			String synId = getProperty("SCORING_DATA_ID");
+        			String inputFileName = getProperty("INPUT_FILE_NAME");
+        			File tmpDir = Files.createTempDir();
+        			inputFile = new File(tmpDir, inputFileName);
+        			synapseAdmin.downloadFromFileEntityCurrentVersion(synId, inputFile);
         		}
            		SubmissionStatus status = bundle.getSubmissionStatus();
            		try {
            	        String result = scoreOneModel(fileHandle, inputFile);
            	        // push result as score (just for demo purposed)
            	        addAnnotation(status, "model-score", result, /*isPrivate*/false);
+           	        removeAnnotation(status, "scoring-failure");
            			status.setStatus(SubmissionStatusEnum.SCORED);
            		} catch (Exception e) {
            			addAnnotation(status, "scoring-failure", e.getMessage(), /*isPrivate*/false);
-           			status.setStatus(SubmissionStatusEnum.REJECTED);
-           			// TODO send failure notification to submitter
+           	        removeAnnotation(status, "model-score");
+          			status.setStatus(SubmissionStatusEnum.REJECTED);
+           			// here we could send failure notification to submitter
+           			e.printStackTrace();
            		}
      			statusesToUpdate.add(status);
         	}
@@ -354,15 +418,9 @@ public class ALSStratificationChallenge {
     		} catch (SynapseConflictingUpdateException e) {
     			// we collided with someone else access the Evaluation.  Will retry!
     		}
+    		throw new RuntimeException("Failed to update submission status(es) after "+BATCH_UPLOAD_RETRY_COUNT+" tries.");
     	}
     }
-    
-//    private File downloadSubmissionFile(Submission submission) throws SynapseException, IOException {
-//		String fileHandleId = getFileHandleIdFromEntityBundle(submission.getEntityBundleJSON());
-//		File temp = File.createTempFile("temp", null);
-//		synapseAdmin.downloadFromSubmission(submission.getId(), fileHandleId, temp);
-//		return temp;
-//    }
     
     private static FileHandle getFileHandleFromEntityBundle(String s) {
     	try {
@@ -390,28 +448,53 @@ public class ALSStratificationChallenge {
     }
     
      
+	// the 'isPrivate' flag should be set to 'true' for information
+	// used by the scoring application but not to be revealed to participants
+	// to see 'public' annotations requires READ access in the Evaluation's
+	// access control list, as the participant has (see setUp(), above). To
+	// see 'private' annotatations requires READ_PRIVATE_SUBMISSION access,
+	// which the Evaluation admin has by default
     private static void addAnnotation(SubmissionStatus status, String key, String value, boolean isPrivate) {
-		Annotations annotations = status.getAnnotations();
+    	if (value.length()>499) value = value.substring(0, 499);
+    	Annotations annotations = status.getAnnotations();
 		if (annotations==null) {
 			annotations=new Annotations();
 			status.setAnnotations(annotations);
 		}
-		StringAnnotation sa = new StringAnnotation();
-		// the 'isPrivate' flag should be set to 'true' for information
-		// used by the scoring application but not to be revealed to participants
-		// to see 'public' annotations requires READ access in the Evaluation's
-		// access control list, as the participant has (see setUp(), above). To
-		// see 'private' annotatations requires READ_PRIVATE_SUBMISSION access,
-		// which the Evaluation admin has by default
-		sa.setIsPrivate(isPrivate);
-		sa.setKey(key);
-		sa.setValue(value);
 		List<StringAnnotation> sas = annotations.getStringAnnos();
 		if (sas==null) {
 			sas = new ArrayList<StringAnnotation>();
 			annotations.setStringAnnos(sas);
 		}
-		sas.add(sa);
+		StringAnnotation matchingSa = null;
+		for (StringAnnotation existingSa : sas) {
+			if (existingSa.getKey().equals(key)) {
+				matchingSa = existingSa;
+				break;
+			}
+		}
+		if (matchingSa==null) {
+			StringAnnotation sa = new StringAnnotation();
+			sa.setIsPrivate(isPrivate);
+			sa.setKey(key);
+			sa.setValue(value);
+			sas.add(sa);
+		} else {
+			matchingSa.setIsPrivate(isPrivate);
+			matchingSa.setValue(value);
+		}
+    }
+        
+    private static void removeAnnotation(SubmissionStatus status, String key) {
+    	Annotations annotations = status.getAnnotations();
+		if (annotations==null) return;
+		List<StringAnnotation> sas = annotations.getStringAnnos();
+		if (sas==null) return;
+		for (StringAnnotation existingSa : sas) {
+			if (existingSa.getKey().equals(key)) {
+				sas.remove(existingSa);
+			}
+		}
     }
         
 	public static void initProperties() {
@@ -433,12 +516,17 @@ public class ALSStratificationChallenge {
    }
 	
 	public static String getProperty(String key) {
+		return getProperty(key, true);
+	}
+		
+	public static String getProperty(String key, boolean required) {
 		initProperties();
 		String commandlineOption = System.getProperty(key);
 		if (commandlineOption!=null) return commandlineOption;
 		String embeddedProperty = properties.getProperty(key);
 		if (embeddedProperty!=null) return embeddedProperty;
-		throw new RuntimeException("Cannot find value for "+key);
+		if (required) throw new RuntimeException("Cannot find value for "+key);
+		return null;
 	}	
 	  
 	private static SynapseClient createSynapseClient() {

@@ -1,6 +1,7 @@
 package org.sagebionetworks;
 
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import static org.sagebionetworks.ALSStratificationChallenge.isValidDockerReference;
 
 import org.junit.Test;
