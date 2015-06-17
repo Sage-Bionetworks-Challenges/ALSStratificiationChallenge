@@ -161,16 +161,6 @@ public class ALSStratificationChallenge {
    		return executeShellCommand(dockerCommand, params, envp, workingDirectory);
     }
     
-//    public static String mountFolder(File hostFolder, File vmVolumne, File workingDirectory) throws IOException {
-//    	String[] params = new String[4];
-//    	int i = 0;
-//    	params[i++]="-t";
-//    	params[i++]="vboxsf";
-//    	params[i++]=hostFolder.getAbsolutePath();
-//    	params[i++]= vmVolumne.getAbsolutePath();
-//   		return executeShellCommand("mount", params, Collections.EMPTY_LIST, workingDirectory);  
-//    }
-    
     public static String getDockerReferenceFromFileHandle(FileHandle fileHandle) {
     	if (!(fileHandle instanceof ExternalFileHandle)) 
     		throw new RuntimeException("Submission is not a Docker reference.  Not an external file handle.");
